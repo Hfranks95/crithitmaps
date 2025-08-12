@@ -12,7 +12,7 @@ export default function BattleMapApp() {
   const [grid, setGrid] = useState({ sizePx: 64, show: true, feetPerCell: 5 });
   const [bgImage, setBgImage] = useState(null);
 
-  /** @typedef {{id:string,name:string,x:number,y:number,color:string,isEnemy?:boolean,hp?:number,note?:string,initiative?:number,auraRadiusCells?:number,auraName?:string,auraEffects?:string[],auraPreset?:string,auraPresetValue?:number,auraAffects?:'all'|'allies'|'enemies',conditions?:string[]}} Token */
+  /** @typedef {{id:string,name:string,x:number,y:number,color:string,isEnemy?:boolean,hp?:number,note?:string,initiative?:number,auraRadiusCells?:number,auraName?:string,auraEffects?:string[],auraPreset?:string,auraPresetValue?:number,auraAffects?:'all'|'allies'|'enemies',conditions?:string[], imageUrl?:string, imageObj?:HTMLImageElement|null}} Token */
   /** @type {Token[]} */
   const [tokens, setTokens] = useState(() => [
     {
@@ -30,6 +30,8 @@ export default function BattleMapApp() {
       auraPresetValue: 3,
       auraAffects: "allies",
       conditions: [],
+      imageUrl: "",
+      imageObj: null,
     },
     {
       id: cryptoRandomId(),
@@ -40,6 +42,8 @@ export default function BattleMapApp() {
       hp: 28,
       initiative: 16,
       conditions: ["Sneak Attack Ready"],
+      imageUrl: "",
+      imageObj: null,
     },
     {
       id: cryptoRandomId(),
@@ -51,6 +55,8 @@ export default function BattleMapApp() {
       hp: 12,
       initiative: 12,
       conditions: [],
+      imageUrl: "",
+      imageObj: null,
     },
   ]);
 
@@ -134,6 +140,7 @@ export default function BattleMapApp() {
   useEffect(() => {
     const c = canvasRef.current;
     if (!c) return;
+    anitJagg(c); // ensure crisp lines on some browsers
     const ctx = c.getContext("2d");
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
@@ -182,7 +189,7 @@ export default function BattleMapApp() {
     const selectedToken = tokens.find((t) => t.id === selectedId);
     const highlightIds = computeHighlightTargets(selectedToken, tokens);
 
-    // Tokens (circles filling the cell)
+    // Tokens (circles filling the cell) + circular image crop if provided
     for (const t of tokens) {
       const cx = (t.x + 0.5) * cellPx + view.offsetX * dpr;
       const cy = (t.y + 0.5) * cellPx + view.offsetY * dpr;
@@ -191,14 +198,37 @@ export default function BattleMapApp() {
       const isHL  = highlightIds.has(t.id);
 
       ctx.save();
-      // body
+      // circle clip path
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fillStyle = t.color;
-      ctx.fill();
+      ctx.clip();
+
+      if (t.imageObj && t.imageObj.complete) {
+        // draw image as aspect-fill in the circle square (2r x 2r)
+        const side = r * 2;
+        const iw = t.imageObj.naturalWidth || t.imageObj.width || 1;
+        const ih = t.imageObj.naturalHeight || t.imageObj.height || 1;
+        const scale = Math.max(side / iw, side / ih);
+        const dw = iw * scale;
+        const dh = ih * scale;
+        const dx = cx - dw / 2;
+        const dy = cy - dh / 2;
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(t.imageObj, dx, dy, dw, dh);
+      } else {
+        // fallback fill color
+        ctx.fillStyle = t.color;
+        ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+      }
+
+      // restore to draw ring etc
+      ctx.restore();
+
       // ring
       ctx.lineWidth = isSel ? 6 : 2;
       ctx.strokeStyle = isSel ? "#f59e0b" : isHL ? "#16a34a" : "#111827";
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.stroke();
 
       // name label
@@ -413,6 +443,8 @@ export default function BattleMapApp() {
         hp: isEnemy ? 10 : 30,
         initiative: 10,
         conditions: [],
+        imageUrl: "",
+        imageObj: null,
       },
     ]);
   }
@@ -459,10 +491,15 @@ export default function BattleMapApp() {
     );
   }
 
+  // NEW: toggle aura preset (click again to clear)
   function applyAuraPresetToSelected(preset) {
     if (!selectedId) return;
     setTokens(prev => prev.map(t => {
       if (t.id !== selectedId) return t;
+      // toggle off if already selected
+      if (t.auraPreset === preset.key) {
+        return { ...t, auraPreset: "none", auraName: "", auraEffects: (t.auraEffects||[]), auraRadiusCells: 0 };
+      }
       // merge default aura effects (no duplicates)
       const cur = t.auraEffects || [];
       const add = preset.defaultAuraEffects || [];
@@ -514,6 +551,24 @@ export default function BattleMapApp() {
     const img = new Image();
     img.onload = () => setBgImage(img);
     img.src = url;
+  }
+
+  // NEW: per-token image upload
+  function loadTokenImage(file, tokenId) {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      setTokens(prev => prev.map(t =>
+        t.id === tokenId ? { ...t, imageUrl: url, imageObj: img } : t
+      ));
+    };
+    img.src = url;
+  }
+  function clearTokenImage(tokenId) {
+    setTokens(prev => prev.map(t =>
+      t.id === tokenId ? { ...t, imageUrl: "", imageObj: null } : t
+    ));
   }
 
   // ===== UI =====
@@ -633,7 +688,7 @@ export default function BattleMapApp() {
           <div style={{ display: "grid", gap: 6 }}>
             {sortedTokens.map((t, idx) => (
               <div key={t.id} className="card" data-selected={t.id === selectedId} onClick={() => setSelectedId(t.id)}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span
                     style={{
                       width: 14, height: 14, borderRadius: 999, background: t.color,
@@ -653,6 +708,23 @@ export default function BattleMapApp() {
                   <label>Init</label>
                   <input type="number" value={t.initiative ?? 0} onChange={(e) => updateToken(t.id, { initiative: parseInt(e.target.value) || 0 })} />
                 </div>
+
+                {/* Quick token image upload + clear */}
+                <div className="row">
+                  <label>Token image</label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <label className="file small">
+                      <input type="file" accept="image/*" onChange={(e) => e.target.files && loadTokenImage(e.target.files[0], t.id)} />
+                      <span>Upload</span>
+                    </label>
+                    {t.imageObj && (
+                      <button className="btn danger" onClick={(e) => { e.stopPropagation(); clearTokenImage(t.id); }}>
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 <div className="row">
                   <label>Aura r (cells)</label>
                   <input type="number" min={0} value={t.auraRadiusCells ?? 0}
@@ -663,7 +735,26 @@ export default function BattleMapApp() {
                   <input type="text" value={t.auraName ?? ""} onChange={(e) => updateToken(t.id, { auraName: e.target.value })} />
                 </div>
 
-                {/* Effects chips */}
+                {/* Active Aura Preset chip (removable) */}
+                {t.auraPreset && t.auraPreset !== "none" && (
+                  <div className="row multi">
+                    <label>Aura preset</label>
+                    <div className="chips">
+                      <span className="chip pillchip">
+                        <span className="txt">
+                          {AURA_PRESETS.find(a => a.key === t.auraPreset)?.label || t.auraPreset}
+                        </span>
+                        <button
+                          className="x"
+                          onClick={(e) => { e.stopPropagation(); updateToken(t.id, { auraPreset: "none", auraName: "", auraRadiusCells: 0 }); }}
+                          aria-label="Remove aura preset"
+                        >×</button>
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Effects chips (manual, removable) */}
                 <ChipField
                   label="Effects"
                   values={t.auraEffects || []}
@@ -672,7 +763,7 @@ export default function BattleMapApp() {
                   placeholder="Add effect and press Enter"
                 />
 
-                {/* Conditions chips */}
+                {/* Conditions chips (manual, removable) */}
                 <ChipField
                   label="Conditions"
                   values={t.conditions || []}
@@ -680,6 +771,20 @@ export default function BattleMapApp() {
                   onRemove={(idx) => updateToken(t.id, { conditions: (t.conditions || []).filter((_, i) => i !== idx) })}
                   placeholder="Add condition and press Enter"
                 />
+
+                {/* Active Effects (read-only summary) */}
+                { (tokenEffects[t.id]?.length || 0) > 0 && (
+                  <div className="row multi">
+                    <label>Active effects</label>
+                    <div className="chips">
+                      {tokenEffects[t.id].map((v, i) => (
+                        <span key={i} className="chip" style={{ opacity: 0.9 }}>
+                          {v}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="row">
                   <label>Note</label>
@@ -768,7 +873,7 @@ export default function BattleMapApp() {
             value={presetQuery}
             onChange={(e) => setPresetQuery(e.target.value)}
           />
-        <div className="preset-grid">
+          <div className="preset-grid">
             <div>
               <h4>Conditions</h4>
               <div className="chips">
@@ -782,11 +887,22 @@ export default function BattleMapApp() {
             <div>
               <h4>Auras</h4>
               <div className="chips">
-                {filteredAuras.map((a) => (
-                  <button key={a.key} className="chip" disabled={!selectedId} onClick={() => applyAuraPresetToSelected(a)}>
-                    {a.label}
-                  </button>
-                ))}
+                {filteredAuras.map((a) => {
+                  const sel = tokens.find(t => t.id === selectedId);
+                  const active = sel && sel.auraPreset === a.key && a.key !== "none";
+                  return (
+                    <button
+                      key={a.key}
+                      className="chip"
+                      data-active={active ? "true" : "false"}
+                      disabled={!selectedId}
+                      onClick={() => applyAuraPresetToSelected(a)}
+                      title={a.defaultName || a.label}
+                    >
+                      {a.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -952,6 +1068,8 @@ export default function BattleMapApp() {
             <TokenInspector
               token={tokens.find((t) => t.id === selectedId)}
               onChange={(patch) => updateToken(selectedId, patch)}
+              onUploadImage={(file) => loadTokenImage(file, selectedId)}
+              onClearImage={() => clearTokenImage(selectedId)}
             />
           ) : (
             <p style={{ opacity: 0.6 }}>Select a token to edit.</p>
@@ -972,6 +1090,7 @@ export default function BattleMapApp() {
         .btn.ghost:hover{border-style:solid}
         .file input{display:none}
         .file span{padding:6px 10px;border:1px dashed #cbd5e1;border-radius:10px;cursor:pointer}
+        .file.small span{padding:4px 8px;font-size:12px}
         .card{border:1px solid #e5e7eb;border-radius:12px;padding:8px;background:#fff}
         .card[data-selected="true"]{box-shadow:0 0 0 2px #fbbf24 inset}
         .card.small{padding:8px}
@@ -986,6 +1105,7 @@ export default function BattleMapApp() {
         .chips{display:flex;flex-wrap:wrap;gap:6px;max-width:100%}
         .chips.input{align-items:center}
         .chip{padding:4px 8px;border:1px solid #e5e7eb;border-radius:999px;background:#fff}
+        .chip[data-active=\"true\"]{background:#eff6ff;border-color:#bfdbfe}
         .chip.pillchip{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;background:#fff7df;border:1px solid #e5e7eb}
         .chip.pillchip .x{border:none;background:transparent;cursor:pointer;font-weight:700;color:#7a1c1c}
         .chip-input{flex:1 1 auto;min-width:0;width:100%;max-width:100%;padding:6px 8px;border:1px dashed #e5e7eb;border-radius:10px;background:#fff}
@@ -1072,7 +1192,7 @@ function ChipField({ label, values, onAdd, onRemove, placeholder }) {
   );
 }
 
-function TokenInspector({ token, onChange }) {
+function TokenInspector({ token, onChange, onUploadImage, onClearImage }) {
   if (!token) return null;
   return (
     <div className="card">
@@ -1083,6 +1203,23 @@ function TokenInspector({ token, onChange }) {
       <div className="row"><label>HP</label><input type="number" value={token.hp ?? 0} onChange={(e) => onChange({ hp: parseInt(e.target.value) || 0 })} /></div>
       <div className="row"><label>Init</label><input type="number" value={token.initiative ?? 0} onChange={(e) => onChange({ initiative: parseInt(e.target.value) || 0 })} /></div>
       <div className="row"><label>Enemy?</label><input type="checkbox" checked={!!token.isEnemy} onChange={(e) => onChange({ isEnemy: e.target.checked })} /></div>
+
+      {/* Token image controls */}
+      <div className="row">
+        <label>Token image</label>
+        <div style={{ display: "flex", gap: 6 }}>
+          <label className="file small">
+            <input type="file" accept="image/*" onChange={(e) => e.target.files && onUploadImage?.(e.target.files[0])} />
+            <span>Upload</span>
+          </label>
+          {token.imageObj && (
+            <button className="btn danger" onClick={() => onClearImage?.()}>
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="row"><label>Aura r (cells)</label><input type="number" min={0} value={token.auraRadiusCells ?? 0} onChange={(e) => onChange({ auraRadiusCells: clamp(parseInt(e.target.value), 0, 20) })} /></div>
       <div className="row"><label>Aura name</label><input value={token.auraName ?? ""} onChange={(e) => onChange({ auraName: e.target.value })} /></div>
 
@@ -1409,6 +1546,9 @@ function computeHighlightTargets(selectedToken, tokens) {
   }
   return out;
 }
+
+/* Fix subtle canvas jaggies on some browsers by nudging width/height to integers */
+function anitJagg(canvas){ const w=canvas.width|0,h=canvas.height|0; if(canvas.width!==w) canvas.width=w; if(canvas.height!==h) canvas.height=h; }
 
 /* ================== Dev Self-tests (non-fatal) ================== */
 if (import.meta.env?.DEV) {
