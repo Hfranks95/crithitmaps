@@ -978,17 +978,17 @@ export default function BattleMapApp() {
         .row{display:flex;align-items:center;gap:6px;margin-top:6px}
         .row.multi{align-items:flex-start}
         .row label{opacity:.7;width:120px}
-        .row input, .row select{flex:1;padding:4px 6px;border:1px solid #e5e7eb;border-radius:8px}
+        .row input, .row select{flex:1 1 auto;min-width:0;max-width:100%;padding:4px 6px;border:1px solid #e5e7eb;border-radius:8px}
         .pill{margin-left:8px;font-size:11px;padding:2px 6px;border-radius:999px;background:#ecfeff;border:1px solid #a5f3fc}
         .pill.red{background:#fff1f2;border-color:#fecdd3}
         .search{width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px}
         .preset-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-        .chips{display:flex;flex-wrap:wrap;gap:6px}
+        .chips{display:flex;flex-wrap:wrap;gap:6px;max-width:100%}
         .chips.input{align-items:center}
         .chip{padding:4px 8px;border:1px solid #e5e7eb;border-radius:999px;background:#fff}
         .chip.pillchip{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;background:#fff7df;border:1px solid #e5e7eb}
         .chip.pillchip .x{border:none;background:transparent;cursor:pointer;font-weight:700;color:#7a1c1c}
-        .chip-input{min-width:140px;padding:6px 8px;border:1px dashed #e5e7eb;border-radius:10px;background:#fff}
+        .chip-input{flex:1 1 auto;min-width:0;width:100%;max-width:100%;padding:6px 8px;border:1px dashed #e5e7eb;border-radius:10px;background:#fff}
 
         /* Sidebar slide + fade */
         .sidebar.left, .sidebar.right {
@@ -996,6 +996,7 @@ export default function BattleMapApp() {
           will-change: opacity, transform;
           box-sizing: border-box;
         }
+        .sidebar .card, .sidebar .row, .sidebar .chips { min-width: 0; }
         .sidebar * { max-width: 100%; word-break: break-word; }
         .sidebar.left[aria-hidden="true"]  { opacity: 0; transform: translateX(-8px); }
         .sidebar.right[aria-hidden="true"] { opacity: 0; transform: translateX(8px); }
@@ -1026,6 +1027,8 @@ export default function BattleMapApp() {
         @media (max-width: 900px) {
           .edge-tab { width: 30px; height: 56px; }
         }
+        @media (max-width: 1200px) { .row label { width:100px; } }
+        @media (max-width: 980px)  { .row label { width:90px; } }
       `}</style>
     </div>
   );
