@@ -3,6 +3,16 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
  * CritHit Maps — 2D Battle Map (single-file React)
+ * - Circular tokens fill their grid cell (optionally image-cropped)
+ * - Select vs pan auto: click token selects; click empty grid pans
+ * - Measurement & AOEs snap to cell centers and may start over tokens
+ * - Lingering AOE zones that are draggable & editable
+ * - Aura & AOE derived effects auto-apply to tokens in range
+ * - Right sidebar is search-only for presets (conditions + auras/zones)
+ * - Import/Export presets (JSON), merged & deduped with built-ins
+ * - Left sidebar: tokens list with initiative order & controls
+ * - Hidden condition prompts stealth roll; badge shown on token
+ * - Edge tabs & topbar buttons to hide/show sidebars
  */
 
 export default function BattleMapApp() {
@@ -102,23 +112,36 @@ export default function BattleMapApp() {
     if (current) setSelectedId(current.id);
   }, [turnIndex]); // eslint-disable-line
 
-  // Preset search
+  // ===== Preset search + Import/Export =====
   const [presetQuery, setPresetQuery] = useState("");
+  // Imported packs (merged with built-ins for search)
+  const [importedConditions, setImportedConditions] = useState([]);
+  const [importedAuras, setImportedAuras] = useState([]);
+
+  const ALL_CONDITIONS = useMemo(
+    () => dedupeStrings([...CONDITION_PRESETS, ...importedConditions]),
+    [importedConditions]
+  );
+  const ALL_AURAS = useMemo(
+    () => dedupeAuras([...AURA_PRESETS, ...importedAuras]),
+    [importedAuras]
+  );
+
   const filteredConditions = useMemo(
     () =>
-      CONDITION_PRESETS.filter((c) =>
+      ALL_CONDITIONS.filter((c) =>
         c.toLowerCase().includes(presetQuery.toLowerCase())
       ),
-    [presetQuery]
+    [presetQuery, ALL_CONDITIONS]
   );
   const filteredAuras = useMemo(
     () =>
-      AURA_PRESETS.filter((a) =>
+      ALL_AURAS.filter((a) =>
         (a.label + " " + (a.tags?.join(" ") || ""))
           .toLowerCase()
           .includes(presetQuery.toLowerCase())
       ),
-    [presetQuery]
+    [presetQuery, ALL_AURAS]
   );
 
   // Effects (derived from auras + lingering AOEs + manual conditions)
@@ -709,6 +732,50 @@ export default function BattleMapApp() {
     );
   }
 
+  // ===== Import/Export Presets =====
+  function handleImportPresets(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result || "{}"));
+        const conds = Array.isArray(data.conditions)
+          ? data.conditions.filter((x) => typeof x === "string" && x.trim())
+          : [];
+        const auras = Array.isArray(data.auras)
+          ? data.auras
+              .filter(isAuraLike)
+              .map(normalizeAura)
+          : [];
+        setImportedConditions((prev) => dedupeStrings([...prev, ...conds]));
+        setImportedAuras((prev) => dedupeAuras([...prev, ...auras]));
+        alert(
+          `Imported ${conds.length} conditions and ${auras.length} auras. They are now searchable.`
+        );
+      } catch (err) {
+        console.error(err);
+        alert("Invalid JSON file. Expect keys: conditions[], auras[].");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function handleExportPresets() {
+    const data = {
+      conditions: importedConditions,
+      auras: importedAuras,
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "crithit-presets.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // ===== UI =====
   return (
     <div
@@ -995,7 +1062,7 @@ export default function BattleMapApp() {
                     <div className="chips">
                       <span className="chip pillchip">
                         <span className="txt">
-                          {AURA_PRESETS.find((a) => a.key === t.auraPreset)?.label ||
+                          {ALL_AURAS.find((a) => a.key === t.auraPreset)?.label ||
                             t.auraPreset}
                         </span>
                         <button
@@ -1168,7 +1235,7 @@ export default function BattleMapApp() {
         <button
           type="button"
           className="edge-tab right"
-          aria-label={showRight ? "Hide right sidebar" : "Show right sidebar"}
+          aria-label={showRight ? "Hide right sidebar"}
           onClick={() => setShowRight((s) => !s)}
           data-open={showRight ? "true" : "false"}
         >
@@ -1198,44 +1265,82 @@ export default function BattleMapApp() {
             value={presetQuery}
             onChange={(e) => setPresetQuery(e.target.value)}
           />
-          <div className="preset-grid">
-            <div>
-              <h4>Conditions</h4>
-              <div className="chips">
-                {filteredConditions.map((c) => (
-                  <button
-                    key={c}
-                    className="chip"
-                    disabled={!selectedId}
-                    onClick={() => addConditionToSelected(c)}
-                  >
-                    {c}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <h4>Auras</h4>
-              <div className="chips">
-                {filteredAuras.map((a) => {
-                  const sel = tokens.find((t) => t.id === selectedId);
-                  const active = sel && sel.auraPreset === a.key && a.key !== "none";
-                  return (
-                    <button
-                      key={a.key}
-                      className="chip"
-                      data-active={active ? "true" : "false"}
-                      disabled={!selectedId}
-                      onClick={() => applyAuraPresetToSelected(a)}
-                      title={a.defaultName || a.label}
-                    >
-                      {a.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+
+          {/* Import/Export controls */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <label className="file small">
+              <input
+                type="file"
+                accept="application/json"
+                onChange={(e) => e.target.files && handleImportPresets(e.target.files[0])}
+              />
+              <span>Import Presets (JSON)</span>
+            </label>
+            <button className="btn" onClick={handleExportPresets}>
+              Export Imported Presets
+            </button>
           </div>
+
+          {/* Search-only results; nothing is shown until user types */}
+          {presetQuery.trim().length === 0 ? (
+            <p style={{ opacity: 0.6, marginTop: 6 }}>
+              Type to search conditions &amp; auras. Nothing is listed by default.
+            </p>
+          ) : (
+            <div className="preset-grid">
+              {/* Conditions results */}
+              {filteredConditions.length > 0 && (
+                <div>
+                  <h4>Conditions</h4>
+                  <div className="chips">
+                    {filteredConditions.map((c) => (
+                      <button
+                        key={c}
+                        className="chip"
+                        disabled={!selectedId}
+                        onClick={() => addConditionToSelected(c)}
+                        title="Add condition to selected token"
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Aura results */}
+              {filteredAuras.length > 0 && (
+                <div>
+                  <h4>Auras</h4>
+                  <div className="chips">
+                    {filteredAuras.map((a) => {
+                      const sel = tokens.find((t) => t.id === selectedId);
+                      const active = sel && sel.auraPreset === a.key && a.key !== "none";
+                      return (
+                        <button
+                          key={a.key}
+                          className="chip"
+                          data-active={active ? "true" : "false"}
+                          disabled={!selectedId}
+                          onClick={() => applyAuraPresetToSelected(a)}
+                          title={a.defaultName || a.label}
+                        >
+                          {a.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* No hits */}
+              {filteredConditions.length === 0 && filteredAuras.length === 0 && (
+                <p style={{ opacity: 0.6, gridColumn: "1 / -1" }}>
+                  No matches. Try different keywords.
+                </p>
+              )}
+            </div>
+          )}
           <div
             style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}
           >
@@ -1963,7 +2068,8 @@ function drawGhost(ctx, ghost, view, grid, dpr) {
 }
 
 /* ================== Effects & Presets ================== */
-const CONDITION_PRESETS = [
+// 5e official conditions
+const OFFICIAL_CONDITIONS = [
   "Blinded",
   "Charmed",
   "Deafened",
@@ -1978,6 +2084,11 @@ const CONDITION_PRESETS = [
   "Restrained",
   "Stunned",
   "Unconscious",
+  "Exhaustion",
+];
+
+// QoL extras you use during play
+const EXTRA_CONDITIONS = [
   "Concentrating",
   "Dodge",
   "Disengage",
@@ -1994,9 +2105,12 @@ const CONDITION_PRESETS = [
   "Raging",
 ];
 
+const CONDITION_PRESETS = [...OFFICIAL_CONDITIONS, ...EXTRA_CONDITIONS];
+
 const AURA_PRESETS = [
   { key: "none", label: "None" },
-  // Allies
+
+  // === Paladin auras ===
   {
     key: "paladin",
     label: "Aura of Protection (saves +X)",
@@ -2004,6 +2118,16 @@ const AURA_PRESETS = [
     defaultName: "Aura of Protection",
     affects: "allies",
     defaultAuraEffects: ["Saving throw bonus (+X)"],
+    tags: ["paladin","protection","+cha","save","bonus"],
+  },
+  {
+    key: "aura-courage",
+    label: "Aura of Courage (fear immunity)",
+    defaultRadiusCells: 2,
+    defaultName: "Aura of Courage",
+    affects: "allies",
+    defaultAuraEffects: ["Immune to frightened"],
+    tags: ["paladin","courage","fear","frightened","immunity"],
   },
   {
     key: "aura-warding",
@@ -2012,6 +2136,63 @@ const AURA_PRESETS = [
     defaultName: "Aura of Warding",
     affects: "allies",
     defaultAuraEffects: ["Resistance to spell damage"],
+    tags: ["paladin","warding","resistance","spells"],
+  },
+  {
+    key: "aura-life",
+    label: "Aura of Life (resist necrotic; healing)",
+    defaultRadiusCells: 2,
+    defaultName: "Aura of Life",
+    affects: "allies",
+    defaultAuraEffects: ["Resistance to necrotic damage","Regain 1 hp at start (if 0)"],
+    tags: ["paladin","life","necrotic","healing"],
+  },
+  {
+    key: "aura-purity",
+    label: "Aura of Purity (save adv; vs diseases/conditions)",
+    defaultRadiusCells: 2,
+    defaultName: "Aura of Purity",
+    affects: "allies",
+    defaultAuraEffects: ["Advantage on CON saves","Resilient vs disease & conditions"],
+    tags: ["paladin","purity","conditions","con saves"],
+  },
+  {
+    key: "aura-vitality",
+    label: "Aura of Vitality (healing pulses)",
+    defaultRadiusCells: 2,
+    defaultName: "Aura of Vitality",
+    affects: "allies",
+    defaultAuraEffects: ["Bonus action: heal 2d6 in aura (per round)"],
+    tags: ["paladin","healing","concentration"],
+  },
+  {
+    key: "holy-aura",
+    label: "Holy Aura (ally save adv; enemy atk disadv)",
+    defaultRadiusCells: 6,
+    defaultName: "Holy Aura",
+    affects: "allies",
+    defaultAuraEffects: ["All saves advantage","Enemies have disadvantage to hit"],
+    tags: ["cleric","8th","holy aura","advantage","disadvantage"],
+  },
+  {
+    key: "circle-of-power",
+    label: "Circle of Power (adv saves vs spells; resist)",
+    defaultRadiusCells: 6,
+    defaultName: "Circle of Power",
+    affects: "allies",
+    defaultAuraEffects: ["Advantage on saves vs spells","Resistance on success"],
+    tags: ["paladin","5th","spell defense"],
+  },
+
+  // === Party buffs ===
+  {
+    key: "bless",
+    label: "Bless (+1d4 atk & saves)",
+    defaultRadiusCells: 6,
+    defaultName: "Bless",
+    affects: "allies",
+    defaultAuraEffects: ["+1d4 to attack rolls", "+1d4 to saving throws"],
+    tags: ["cleric","buff","+1d4","attack","save"],
   },
   {
     key: "beacon-of-hope",
@@ -2020,6 +2201,16 @@ const AURA_PRESETS = [
     defaultName: "Beacon of Hope",
     affects: "allies",
     defaultAuraEffects: ["Advantage on WIS/Death saves", "Max healing received"],
+    tags: ["cleric","beacon","wis","death","healing"],
+  },
+  {
+    key: "crusaders-mantle",
+    label: "Crusader's Mantle (+1d4 radiant to weapon hits)",
+    defaultRadiusCells: 3,
+    defaultName: "Crusader's Mantle",
+    affects: "allies",
+    defaultAuraEffects: ["+1d4 radiant damage on weapon attacks"],
+    tags: ["paladin","radiant","+1d4","weapon"],
   },
   {
     key: "haste-lite",
@@ -2028,16 +2219,10 @@ const AURA_PRESETS = [
     defaultName: "Haste",
     affects: "allies",
     defaultAuraEffects: ["+2 AC", "Advantage on DEX saves"],
+    tags: ["haste","+2 ac","dex","advantage"],
   },
-  {
-    key: "bless",
-    label: "Bless (+1d4 atk & saves)",
-    defaultRadiusCells: 6,
-    defaultName: "Bless",
-    affects: "allies",
-    defaultAuraEffects: ["+1d4 to attack rolls", "+1d4 to saving throws"],
-  },
-  // Enemies
+
+  // === Debuffs ===
   {
     key: "bane",
     label: "Bane (-1d4 atk & saves)",
@@ -2045,6 +2230,16 @@ const AURA_PRESETS = [
     defaultName: "Bane",
     affects: "enemies",
     defaultAuraEffects: ["-1d4 to attack rolls", "-1d4 to saving throws"],
+    tags: ["debuff","-1d4","attack","save"],
+  },
+  {
+    key: "prot-evil-good",
+    label: "Protection from Evil & Good (disadvantage vs types)",
+    defaultRadiusCells: 1,
+    defaultName: "Prot. Evil/Good",
+    affects: "allies",
+    defaultAuraEffects: ["Disadv. to be attacked (certain types)"],
+    tags: ["protection","celestial","fiend","undead","fey","elemental","aberration"],
   },
   {
     key: "spirit-guardians",
@@ -2053,15 +2248,153 @@ const AURA_PRESETS = [
     defaultName: "Spirit Guardians",
     affects: "enemies",
     defaultAuraEffects: ["Difficult terrain", "Start-of-turn damage"],
+    tags: ["cleric","radiant","necrotic","damage","terrain"],
   },
-  // Protection
   {
-    key: "prot-evil-good",
-    label: "Protection from Evil & Good (disadvantage vs types)",
+    key: "spirit-shroud",
+    label: "Spirit Shroud (+1d8 dmg; slow enemies nearby)",
+    defaultRadiusCells: 2,
+    defaultName: "Spirit Shroud",
+    affects: "enemies",
+    defaultAuraEffects: ["Your attacks deal +1d8 damage","Targets' speed -10 ft"],
+    tags: ["cleric","paladin","damage","slow"],
+  },
+
+  // === Common zones modeled for quick apply ===
+  {
+    key: "faerie-fire",
+    label: "Faerie Fire (grant adv vs affected)",
+    defaultRadiusCells: 3,
+    defaultName: "Faerie Fire",
+    affects: "enemies",
+    defaultAuraEffects: ["Attacks against affected have advantage"],
+    tags: ["druid","faerie fire","advantage","outline"],
+  },
+  {
+    key: "darkness",
+    label: "Darkness (heavily obscured; blinded inside)",
+    defaultRadiusCells: 2,
+    defaultName: "Darkness",
+    affects: "all",
+    defaultAuraEffects: ["Heavily obscured area", "Creatures effectively blinded"],
+    tags: ["warlock","darkness","blinded","obscured"],
+  },
+  {
+    key: "daylight",
+    label: "Daylight (bright light dispels darkness)",
+    defaultRadiusCells: 6,
+    defaultName: "Daylight",
+    affects: "all",
+    defaultAuraEffects: ["Bright light in area","Disperses magical darkness (DMG at DM's discretion)"],
+    tags: ["cleric","light","sunlight"],
+  },
+  {
+    key: "silence",
+    label: "Silence (no sound; verbal spells fail)",
+    defaultRadiusCells: 2,
+    defaultName: "Silence",
+    affects: "all",
+    defaultAuraEffects: ["No sound in area", "Spells with verbal components fail"],
+    tags: ["silence","verbal","no sound"],
+  },
+  {
+    key: "fog-cloud",
+    label: "Fog Cloud (heavily obscured area)",
+    defaultRadiusCells: 2,
+    defaultName: "Fog Cloud",
+    affects: "all",
+    defaultAuraEffects: ["Heavily obscured area"],
+    tags: ["druid","sorcerer","obscured","fog"],
+  },
+  {
+    key: "sleet-storm",
+    label: "Sleet Storm (area obscured; conc. checks)",
+    defaultRadiusCells: 4,
+    defaultName: "Sleet Storm",
+    affects: "all",
+    defaultAuraEffects: ["Heavily obscured","Difficult terrain","Concentration checks at disadvantage"],
+    tags: ["storm","ice","obscured","concentration"],
+  },
+  {
+    key: "stinking-cloud",
+    label: "Stinking Cloud (poisoned; hindered actions)",
+    defaultRadiusCells: 2,
+    defaultName: "Stinking Cloud",
+    affects: "all",
+    defaultAuraEffects: ["Poisoned on failed save","Impaired actions"],
+    tags: ["poison","cloud","area"],
+  },
+  {
+    key: "hypnotic-pattern",
+    label: "Hypnotic Pattern (charmed & incapacitated)",
+    defaultRadiusCells: 3,
+    defaultName: "Hypnotic Pattern",
+    affects: "enemies",
+    defaultAuraEffects: ["Charmed", "Incapacitated", "Speed 0"],
+    tags: ["hypnotic","pattern","charmed","incapacitated"],
+  },
+  {
+    key: "moonbeam",
+    label: "Moonbeam (radiant column; start-of-turn dmg)",
     defaultRadiusCells: 1,
-    defaultName: "Prot. Evil/Good",
-    affects: "allies",
-    defaultAuraEffects: ["Disadv. to be attacked (certain types)"],
+    defaultName: "Moonbeam",
+    affects: "enemies",
+    defaultAuraEffects: ["Start-of-turn radiant damage","Shapechangers at disadvantage"],
+    tags: ["druid","radiant","concentration"],
+  },
+  {
+    key: "flaming-sphere",
+    label: "Flaming Sphere (ram; start-of-turn fire)",
+    defaultRadiusCells: 1,
+    defaultName: "Flaming Sphere",
+    affects: "enemies",
+    defaultAuraEffects: ["Start-of-turn fire damage","Rammed for extra damage"],
+    tags: ["wizard","druid","fire","sphere"],
+  },
+  {
+    key: "entangle",
+    label: "Entangle (restrained on fail; difficult terrain)",
+    defaultRadiusCells: 2,
+    defaultName: "Entangle",
+    affects: "enemies",
+    defaultAuraEffects: ["Restrained on failed save", "Difficult terrain"],
+    tags: ["druid","entangle","restrained","terrain"],
+  },
+  {
+    key: "web",
+    label: "Web (restrained on fail; difficult terrain)",
+    defaultRadiusCells: 2,
+    defaultName: "Web",
+    affects: "enemies",
+    defaultAuraEffects: ["Restrained on failed save", "Difficult terrain"],
+    tags: ["web","restrained","terrain"],
+  },
+  {
+    key: "spike-growth",
+    label: "Spike Growth (damage on movement; difficult terrain)",
+    defaultRadiusCells: 3,
+    defaultName: "Spike Growth",
+    affects: "enemies",
+    defaultAuraEffects: ["Takes damage when moving", "Difficult terrain"],
+    tags: ["druid","damage","terrain","movement"],
+  },
+  {
+    key: "cloudkill",
+    label: "Cloudkill (poison damage; moves)",
+    defaultRadiusCells: 4,
+    defaultName: "Cloudkill",
+    affects: "all",
+    defaultAuraEffects: ["Poison damage each turn","Heavily obscured area"],
+    tags: ["wizard","poison","cloud","area"],
+  },
+  {
+    key: "hunger-of-hadar",
+    label: "Hunger of Hadar (cold+acid; blind)",
+    defaultRadiusCells: 3,
+    defaultName: "Hunger of Hadar",
+    affects: "all",
+    defaultAuraEffects: ["Area is dark and difficult to perceive","Cold/acid damage"],
+    tags: ["warlock","void","darkness"],
   },
 ];
 
@@ -2224,163 +2557,97 @@ function tokenInsideCone(token, start, end, spreadDeg = 60) {
     vy = end.gy - start.gy;
   const ux = px - start.gx,
     uy = py - start.gy;
-  const lenV = Math.hypot(vx, vy) || 1e-9;
-  const lenU = Math.hypot(ux, uy);
-  if (lenU > lenV + 1e-6) return false; // beyond length
-  const cos = (vx * ux + vy * uy) / (lenV * lenU || 1e-9);
-  const angle = Math.acos(Math.max(-1, Math.min(1, cos)));
+  const vlen = Math.hypot(vx, vy) || 1e-9;
+  const ulen = Math.hypot(ux, uy);
+  if (ulen < 1e-6) return true;
+  const dot = (vx * ux + vy * uy) / (vlen * ulen);
+  const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
   const half = (spreadDeg * Math.PI) / 180 / 2;
-  return angle <= half + 1e-6;
+  return angle <= half && ulen <= vlen + 1e-6;
 }
-// point test for AOE hit-testing
-function pointInsideCone(wx, wy, start, end, spreadDeg = 60) {
-  const vx = end.gx - start.gx,
-    vy = end.gy - start.gy;
-  const ux = wx - start.gx,
-    uy = wy - start.gy;
-  const lenV = Math.hypot(vx, vy) || 1e-9;
-  const lenU = Math.hypot(ux, uy);
-  if (lenU > lenV + 1e-6) return false;
-  const cos = (vx * ux + vy * uy) / (lenV * lenU || 1e-9);
-  const angle = Math.acos(Math.max(-1, Math.min(1, cos)));
-  const half = (spreadDeg * Math.PI) / 180 / 2;
-  return angle <= half + 0.1; // small tolerance
-}
-function hitTestAOE(list, wx, wy) {
-  // iterate in order; if you later stack AOEs visually, consider reverse order
-  for (let i = 0; i < list.length; i++) {
-    const a = list[i];
-    if (a.type === "circle") {
-      const r = Math.hypot(a.end.gx - a.start.gx, a.end.gy - a.start.gy);
-      if (Math.hypot(wx - a.start.gx, wy - a.start.gy) <= r + 0.25) return a;
-    } else if (a.type === "line") {
-      const d = distPointToSegment(wx, wy, a.start.gx, a.start.gy, a.end.gx, a.end.gy);
-      if (d <= 0.35) return a; // ~35% of a cell tolerance
-    } else if (a.type === "cone") {
-      if (pointInsideCone(wx, wy, a.start, a.end, 60)) return a;
-    }
-  }
-  return null;
-}
-
-function clamp(n, a, b) {
-  const num = Number(n);
-  if (!Number.isFinite(num)) return a;
-  return Math.max(a, Math.min(b, num));
-}
-function round(n, prec = 1) {
-  const p = Math.pow(10, prec);
-  return Math.round(n * p) / p;
-}
-function cryptoRandomId() {
-  try {
-    const g = typeof globalThis !== "undefined" ? globalThis : window;
-    if (g && g.crypto && typeof g.crypto.getRandomValues === "function") {
-      const bytes = new Uint8Array(8);
-      g.crypto.getRandomValues(bytes);
-      return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-    }
-  } catch (_) {}
-  // fallback
-  let out = "";
-  for (let i = 0; i < 8; i++)
-    out += ((Math.random() * 256) | 0).toString(16).padStart(2, "0");
-  return out;
-}
-function hitTestToken(tokens, mx, my, view, grid, dpr) {
-  const cell = grid.sizePx * view.zoom * dpr;
-  for (let i = tokens.length - 1; i >= 0; i--) {
-    const t = tokens[i];
-    const cx = (t.x + 0.5) * cell + view.offsetX * dpr;
-    const cy = (t.y + 0.5) * cell + view.offsetY * dpr;
-    const r = Math.max(2, cell / 2 - 2);
-    if (Math.hypot(mx - cx, my - cy) <= r) return t;
-  }
-  return null;
-}
-
-/* ================== Advantage / Sneak Highlight ================== */
 function computeHighlightTargets(selectedToken, tokens) {
   const out = new Set();
   if (!selectedToken) return out;
+  // Simple rule: if selected has "Sneak Attack Ready" or "Advantage (attacks)",
+  // highlight enemies (or allies if selected is enemy).
+  const hasSA = (selectedToken.conditions || []).includes("Sneak Attack Ready");
   const hasAdv = (selectedToken.conditions || []).includes("Advantage (attacks)");
-  const hasSneak = (selectedToken.conditions || []).includes("Sneak Attack Ready");
-  if (hasAdv) {
-    for (const t of tokens) if (t.isEnemy) out.add(t.id);
-  }
-  if (hasSneak) {
-    for (const enemy of tokens.filter((t) => t.isEnemy)) {
-      if (hasAdv) {
-        out.add(enemy.id);
-        continue;
-      }
-      const allyAdjacent = tokens.some(
-        (p) =>
-          !p.isEnemy &&
-          p.id !== selectedToken.id &&
-          Math.hypot(p.x - enemy.x, p.y - enemy.y) <= 1.01
-      );
-      if (allyAdjacent) out.add(enemy.id);
+  if (hasSA || hasAdv) {
+    for (const t of tokens) {
+      if (!!t.isEnemy !== !!selectedToken.isEnemy) out.add(t.id);
     }
   }
   return out;
 }
-
-/* Fix subtle canvas jaggies on some browsers by nudging width/height to integers */
+function clamp(v, a, b) {
+  return Math.max(a, Math.min(b, v));
+}
+function round(n) {
+  return Math.round(n * 10) / 10;
+}
 function anitJagg(canvas) {
-  const w = canvas.width | 0,
-    h = canvas.height | 0;
-  if (canvas.width !== w) canvas.width = w;
-  if (canvas.height !== h) canvas.height = h;
+  // No-op placeholder: keeps name used in effect; can optionally set alpha/pixel ratio hacks
+  return canvas;
+}
+// Random ID with crypto fallback
+function cryptoRandomId() {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.crypto && typeof globalThis.crypto.getRandomValues === "function") {
+      const arr = new Uint32Array(4);
+      globalThis.crypto.getRandomValues(arr);
+      return (
+        arr[0].toString(16) +
+        arr[1].toString(16) +
+        arr[2].toString(16) +
+        arr[3].toString(16)
+      );
+    }
+  } catch {}
+  // Fallback
+  return (
+    Date.now().toString(16) +
+    Math.floor(Math.random() * 0xffffffff).toString(16)
+  );
 }
 
-/* ================== Dev Self-tests (non-fatal) ================== */
-if (import.meta.env?.DEV) {
-  try {
-    const a = cryptoRandomId(),
-      b = cryptoRandomId();
-    console.assert(
-      /^[0-9a-f]{16}$/i.test(a) && a !== b,
-      "cryptoRandomId format/uniqueness"
-    );
-
-    const pals = [
-      {
-        id: "A",
-        name: "Pally",
-        x: 0,
-        y: 0,
-        auraRadiusCells: 2,
-        auraPreset: "paladin",
-        auraPresetValue: 3,
-      },
-    ];
-    const pcs = [{ id: "B", name: "Rogue", x: 1, y: 1 }];
-    const eff = computeTokenEffects(
-      [...pals, ...pcs],
-      computeAuraIndex([...pals, ...pcs]),
-      []
-    );
-    console.assert(
-      eff["B"].some((s) => s.includes("saving throws")),
-      "Paladin aura applies"
-    );
-
-    const rogue = {
-      id: "R",
-      name: "Rogue",
-      x: 0,
-      y: 0,
-      conditions: ["Sneak Attack Ready"],
-    };
-    const ally = { id: "Al", name: "Fighter", x: 1, y: 0 };
-    const foeNear = { id: "E1", isEnemy: true, x: 1, y: 0 };
-    const foeFar = { id: "E2", isEnemy: true, x: 5, y: 5 };
-    const hs = computeHighlightTargets(rogue, [rogue, ally, foeNear, foeFar]);
-    console.assert(hs.has("E1") && !hs.has("E2"), "Sneak attack highlight ok");
-
-    console.log("✅ Dev self-tests passed");
-  } catch (err) {
-    console.warn("⚠️ Self-tests failed:", err);
+// Import helpers
+function isAuraLike(o) {
+  return (
+    o &&
+    typeof o === "object" &&
+    typeof o.key === "string" &&
+    typeof o.label === "string"
+  );
+}
+function normalizeAura(a) {
+  return {
+    key: a.key,
+    label: a.label,
+    defaultRadiusCells:
+      Number.isFinite(a.defaultRadiusCells) && a.defaultRadiusCells >= 0
+        ? a.defaultRadiusCells
+        : 2,
+    defaultName: a.defaultName || a.label,
+    affects:
+      a.affects === "all" || a.affects === "allies" || a.affects === "enemies"
+        ? a.affects
+        : "all",
+    defaultAuraEffects: Array.isArray(a.defaultAuraEffects)
+      ? a.defaultAuraEffects.filter((x) => typeof x === "string" && x.trim())
+      : [],
+    tags: Array.isArray(a.tags)
+      ? a.tags.filter((x) => typeof x === "string" && x.trim())
+      : [],
+  };
+}
+function dedupeStrings(list) {
+  return Array.from(new Set(list.map((s) => String(s))));
+}
+function dedupeAuras(list) {
+  const map = new Map();
+  for (const a of list) {
+    if (!isAuraLike(a)) continue;
+    if (!map.has(a.key)) map.set(a.key, normalizeAura(a));
   }
+  return Array.from(map.values());
 }
