@@ -263,27 +263,10 @@ export default function BattleMapApp() {
     const mx = (e.clientX - rect.left) * dpr;
     const my = (e.clientY - rect.top) * dpr;
 
-    // 1) try to select/drag token first (circle hit-test)
-    const hit = hitTestToken(tokens, mx, my, view, grid, dpr);
-    if (hit) {
-      setSelectedId(hit.id);
-      dragRef.current = {
-        mode: "token",
-        tokenId: hit.id,
-        startMouse: { x: mx, y: my },
-        startToken: { x: hit.x, y: hit.y },
-      };
-      e.target.setPointerCapture?.(e.pointerId);
-      return;
-    }
-
-    // 2) if tool active, start at center of square
+    // If a measurement/AOE tool is active, start from the grid center under the pointer — even if over a token
     if (tool !== "select") {
       const world = screenPxToWorld(mx, my, view, grid, dpr);
-      const snapped = {
-        gx: Math.floor(world.wx) + 0.5,
-        gy: Math.floor(world.wy) + 0.5,
-      };
+      const snapped = { gx: Math.floor(world.wx) + 0.5, gy: Math.floor(world.wy) + 0.5 };
       const type =
         tool === "measure"
           ? "measure"
@@ -297,7 +280,21 @@ export default function BattleMapApp() {
       return;
     }
 
-    // 3) otherwise pan
+    // Otherwise, in Select mode try to select/drag a token first
+    const hit = hitTestToken(tokens, mx, my, view, grid, dpr);
+    if (hit) {
+      setSelectedId(hit.id);
+      dragRef.current = {
+        mode: "token",
+        tokenId: hit.id,
+        startMouse: { x: mx, y: my },
+        startToken: { x: hit.x, y: hit.y },
+      };
+      e.target.setPointerCapture?.(e.pointerId);
+      return;
+    }
+
+    // Otherwise, pan the map
     dragRef.current = {
       mode: "pan",
       startMouse: { x: mx, y: my },
@@ -771,7 +768,7 @@ export default function BattleMapApp() {
             value={presetQuery}
             onChange={(e) => setPresetQuery(e.target.value)}
           />
-          <div className="preset-grid">
+        <div className="preset-grid">
             <div>
               <h4>Conditions</h4>
               <div className="chips">
