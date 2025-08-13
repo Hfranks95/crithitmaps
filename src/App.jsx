@@ -13,6 +13,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * - Left sidebar: tokens list with initiative order & controls
  * - Hidden condition prompts stealth roll; badge shown on token
  * - Edge tabs & topbar buttons to hide/show sidebars
+ * - Flanking (DMG variant): auto “advantage” against flanked targets + highlight
  */
 
 /** @typedef {{
@@ -237,7 +238,7 @@ export default function BattleMapApp() {
     for (const a of persistAOE)
       if (a.enabled) drawAOE(ctx, a, view, grid, dpr, a.id === selectedAoeId);
 
-    // Highlights (advantage / sneak attack)
+    // Highlights (advantage / sneak attack / flanking)
     const selectedToken = tokens.find((t) => t.id === selectedId);
     const highlightIds = computeHighlightTargets(selectedToken, tokens);
 
@@ -1055,10 +1056,6 @@ export default function BattleMapApp() {
                   </div>
                 </div>
 
-                {/* LEFT-SIDEBAR CLEANUP:
-                    Removed per-token Aura/Conditions/Effects editors.
-                    Hidden → Stealth remains below when applicable. */}
-
                 {(t.conditions || []).includes("Hidden") && (
                   <div className="row">
                     <label>Stealth</label>
@@ -1472,7 +1469,7 @@ export default function BattleMapApp() {
                   {/* Read-only derived effects from auras/AOEs */}
                   {derived.length > 0 && (
                     <div className="row multi">
-                      <label>From auras/AOE</label>
+                      <label>From auras/AOEs</label>
                       <div className="chips">
                         {derived.map((v, i) => (
                           <span key={i} className="chip" style={{ opacity: 0.85 }}>
@@ -2195,6 +2192,11 @@ function computeTokenEffects(tokens, auras, aoes) {
     // 3) User-set token conditions also appear
     for (const cond of t.conditions || []) effects.push(cond);
 
+    // 4) Flanking (DMG optional rule): two opponents adjacent on opposite sides/corners
+    if (isFlanked(t, tokens)) {
+      effects.push("Flanked: enemies have advantage on melee attacks");
+    }
+
     out[t.id] = effects;
   }
   return out;
@@ -2246,18 +2248,59 @@ function tokenInsideCone(token, start, end, spreadDeg = 60) {
   const half = (spreadDeg * Math.PI) / 180 / 2;
   return angle <= half && ulen <= vlen + 1e-6;
 }
+
+/* ===== Flanking helpers (DMG variant) ===== */
+function sign1(n) { return n > 0 ? 1 : n < 0 ? -1 : 0; }
+function isAdjacentCells(a, b) {
+  // Chebyshev distance of 1 (shares a side or a corner)
+  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) === 1;
+}
+function isOppositeAroundTarget(target, a, b) {
+  // Both adjacent to target and on opposite sides/corners
+  if (!isAdjacentCells(target, a) || !isAdjacentCells(target, b)) return false;
+  const dx1 = sign1(a.x - target.x), dy1 = sign1(a.y - target.y);
+  const dx2 = sign1(b.x - target.x), dy2 = sign1(b.y - target.y);
+  if (dx1 === 0 && dy1 === 0) return false;
+  return dx1 === -dx2 && dy1 === -dy2;
+}
+function isFlanked(target, tokens) {
+  // Target is flanked if two opponents are adjacent on opposite sides/corners
+  const foes = tokens.filter((u) => !isAllyOf(u, target));
+  for (let i = 0; i < foes.length; i++) {
+    for (let j = i + 1; j < foes.length; j++) {
+      if (isOppositeAroundTarget(target, foes[i], foes[j])) return true;
+    }
+  }
+  return false;
+}
+function attackerHasFlankingAdv(attacker, target, tokens) {
+  // Attacker gains advantage if an ally is opposite across the target
+  if (!attacker || !target) return false;
+  if (isAllyOf(attacker, target)) return false;
+  if (!isAdjacentCells(attacker, target)) return false; // assume 5-ft melee
+  const allies = tokens.filter((t) => t.id !== attacker.id && isAllyOf(t, attacker));
+  return allies.some((b) => isOppositeAroundTarget(target, attacker, b));
+}
+
 function computeHighlightTargets(selectedToken, tokens) {
   const out = new Set();
   if (!selectedToken) return out;
+
   const hasSA = (selectedToken.conditions || []).includes("Sneak Attack Ready");
-  const hasAdv = (selectedToken.conditions || []).includes("Advantage (attacks)");
-  if (hasSA || hasAdv) {
-    for (const t of tokens) {
-      if (!!t.isEnemy !== !!selectedToken.isEnemy) out.add(t.id);
+  const hasAdvTag = (selectedToken.conditions || []).includes("Advantage (attacks)");
+
+  for (const t of tokens) {
+    if (t.id === selectedToken.id) continue;
+    if (!!t.isEnemy !== !!selectedToken.isEnemy) {
+      // Manual tags: advantage / SA ready highlight all enemies
+      if (hasSA || hasAdvTag) out.add(t.id);
+      // Flanking-based advantage
+      if (attackerHasFlankingAdv(selectedToken, t, tokens)) out.add(t.id);
     }
   }
   return out;
 }
+
 function clamp(v, a, b) {
   return Math.max(a, Math.min(b, v));
 }
@@ -2290,6 +2333,50 @@ function cryptoRandomId() {
     Date.now().toString(16) +
     Math.floor(Math.random() * 0xffffffff).toString(16)
   );
+}
+
+// Hit-tests
+function hitTestToken(tokens, mx, my, view, grid, dpr) {
+  const cell = grid.sizePx * view.zoom * dpr;
+  const r = Math.max(2, cell / 2 - 2);
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const t = tokens[i];
+    const cx = (t.x + 0.5) * cell + view.offsetX * dpr;
+    const cy = (t.y + 0.5) * cell + view.offsetY * dpr;
+    const dx = mx - cx;
+    const dy = my - cy;
+    if (dx * dx + dy * dy <= r * r) return t;
+  }
+  return null;
+}
+
+function hitTestAOE(list, wx, wy) {
+  // Simple bounding checks per shape in world-space
+  for (let i = list.length - 1; i >= 0; i--) {
+    const a = list[i];
+    if (!a.enabled) continue;
+    if (a.type === "circle") {
+      const r = Math.hypot(a.end.gx - a.start.gx, a.end.gy - a.start.gy);
+      const d = Math.hypot(wx - a.start.gx, wy - a.start.gy);
+      if (d <= r + 0.5) return a;
+    } else if (a.type === "line") {
+      const d = distPointToSegment(wx, wy, a.start.gx, a.start.gy, a.end.gx, a.end.gy);
+      if (d <= 0.6) return a;
+    } else if (a.type === "cone") {
+      // quick cone check similar to tokenInsideCone
+      const vx = a.end.gx - a.start.gx,
+        vy = a.end.gy - a.start.gy;
+      const ux = wx - a.start.gx,
+        uy = wy - a.start.gy;
+      const vlen = Math.hypot(vx, vy) || 1e-9;
+      const ulen = Math.hypot(ux, uy);
+      const dot = (vx * ux + vy * uy) / (vlen * ulen || 1e-9);
+      const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+      const half = (60 * Math.PI) / 180 / 2;
+      if (angle <= half && ulen <= vlen + 0.6) return a;
+    }
+  }
+  return null;
 }
 
 // Import helpers
