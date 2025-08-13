@@ -1183,12 +1183,12 @@ export default function BattleMapApp() {
         <Section title="Presets (search & apply)">
           <input
             className="search"
-            placeholder="Search conditions/auras…"
+            placeholder="Search a condition or aura…"
             value={presetQuery}
             onChange={(e) => setPresetQuery(e.target.value)}
           />
 
-          {/* Import/Export controls */}
+          {/* Import/Export controls (kept) */}
           <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <label className="file small">
               <input
@@ -1203,67 +1203,52 @@ export default function BattleMapApp() {
             </button>
           </div>
 
-          {/* Search-only results; nothing is shown until user types */}
-          {presetQuery.trim().length === 0 ? (
+          {/* SEARCH-ONLY: nothing appears until they type 2+ chars */}
+          {presetQuery.trim().length < 2 ? (
             <p style={{ opacity: 0.6, marginTop: 6 }}>
-              Type to search conditions &amp; auras. Nothing is listed by default.
+              Type at least 2 characters to find conditions &amp; auras.
             </p>
           ) : (
-            <div className="preset-grid">
-              {/* Conditions results */}
-              {filteredConditions.length > 0 && (
-                <div>
-                  <h4>Conditions</h4>
-                  <div className="chips">
-                    {filteredConditions.map((c) => (
-                      <button
-                        key={c}
-                        className="chip"
-                        disabled={!selectedId}
-                        onClick={() => addConditionToSelected(c)}
-                        title="Add condition to selected token"
-                      >
-                        {c}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+            (() => {
+              const sel = tokens.find((t) => t.id === selectedId);
+              const results = [
+                ...filteredConditions.map((c) => ({ kind: "condition", key: c, label: c })),
+                ...filteredAuras.map((a) => ({ kind: "aura", key: a.key, label: a.label, obj: a })),
+              ].slice(0, 50);
 
-              {/* Aura results */}
-              {filteredAuras.length > 0 && (
-                <div>
-                  <h4>Auras</h4>
-                  <div className="chips">
-                    {filteredAuras.map((a) => {
-                      const sel = tokens.find((t) => t.id === selectedId);
-                      const active =
-                        !!sel && getTokenAuraEntries(sel).some((e) => e.key === a.key);
-                      return (
+              if (results.length === 0) {
+                return <p style={{ opacity: 0.6, marginTop: 6 }}>No matches. Try different keywords.</p>;
+              }
+
+              return (
+                <ul className="resultlist">
+                  {results.map((r) => {
+                    const active = r.kind === "aura" && sel ? getTokenAuraEntries(sel).some((e) => e.key === r.key) : false;
+                    return (
+                      <li key={`${r.kind}:${r.key}`}>
                         <button
-                          key={a.key}
-                          className="chip"
+                          className="result"
                           data-active={active ? "true" : "false"}
                           disabled={!selectedId}
-                          onClick={() => applyAuraPresetToSelected(a)}
-                          title={a.defaultName || a.label}
+                          onClick={() => {
+                            if (r.kind === "condition") addConditionToSelected(r.key);
+                            else applyAuraPresetToSelected(r.obj);
+                          }}
+                          title={r.kind === "aura" ? `${r.label} — click to ${active ? "remove" : "apply"}` : `${r.label} — click to add`}
                         >
-                          {a.label}
+                          <span className="badge" data-kind={r.kind}>{r.kind === "aura" ? "Aura" : "Cond"}</span>
+                          <span className="label">{r.label}</span>
+                          {r.kind === "aura" && active && <span className="active-dot" />}
                         </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* No hits */}
-              {filteredConditions.length === 0 && filteredAuras.length === 0 && (
-                <p style={{ opacity: 0.6, gridColumn: "1 / -1" }}>
-                  No matches. Try different keywords.
-                </p>
-              )}
-            </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              );
+            })()
           )}
+
+          {/* Quick add lingering effects remain for convenience */}
           <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               className="btn"
@@ -1549,6 +1534,29 @@ export default function BattleMapApp() {
         .chip.pillchip{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;background:#fff7df;border:1px solid #e5e7eb}
         .chip.pillchip .x{border:none;background:transparent;cursor:pointer;font-weight:700;color:#7a1c1c}
         .chip-input{flex:1 1 auto;min-width:0;width:100%;max-width:100%;padding:6px 8px;border:1px dashed #e5e7eb;border-radius:10px;background:#fff}
+
+        .resultlist { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
+        .result {
+          width: 100%;
+          display: grid;
+          grid-template-columns: auto 1fr auto;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 10px;
+          border: 1px solid #e5e7eb;
+          border-radius: 10px;
+          background: #fff;
+          cursor: pointer;
+        }
+        .result[data-active="true"] { border-color: #bfdbfe; background: #eff6ff; }
+        .result .label { text-align: left; }
+        .badge {
+          font-size: 11px; padding: 2px 6px; border-radius: 999px;
+          border: 1px solid #e5e7eb; background: #fff;
+        }
+        .badge[data-kind="aura"] { background: #f0f9ff; border-color: #bae6fd; }
+        .badge[data-kind="condition"] { background: #fff7df; border-color: #fde68a; }
+        .active-dot { width: 10px; height: 10px; border-radius: 999px; background: #16a34a; justify-self: end; }
 
         /* Sidebar slide + fade */
         .sidebar.left, .sidebar.right {
